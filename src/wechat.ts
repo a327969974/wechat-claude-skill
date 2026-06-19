@@ -62,10 +62,16 @@ const SESSION_EXPIRED_ERRCODE = -14;
 const SESSION_EXPIRED_PAUSE_MS = 60 * 60 * 1_000;
 const RATE_LIMIT_ERRCODE = -2;
 
-/** Detect stale session: ret=-2 with "unknown error" = session expired, not rate limit */
+/** Detect stale session.
+ *  Based on hermes-agent implementation:
+ *  - errcode=-14 (SESSION_EXPIRED_ERRCODE) = session expired
+ *  - ret=-2 (RATE_LIMIT_ERRCODE) = rate-limited, NOT session expired
+ *  Previously ret=-2 without errmsg was misidentified as session expired,
+ *  causing sendMessage to fail prematurely instead of retrying as rate-limited. */
 function isStaleSession(ret?: number, errcode?: number, errmsg?: string): boolean {
-  if (ret !== RATE_LIMIT_ERRCODE && errcode !== RATE_LIMIT_ERRCODE) return false;
-  return (errmsg || '').toLowerCase() === 'unknown error';
+  // Only errcode=-14 indicates session expiry; ret=-2 is rate-limited
+  if (errcode === SESSION_EXPIRED_ERRCODE) return true;
+  return false;
 }
 
 // Message dedup
@@ -286,7 +292,7 @@ async function sendMessageWithRateLimit(
   if (waitMs > 0) await sleep(waitMs);
 
   const message: any = {
-    from_user_id: '',
+    from_user_id: config.accountId,
     to_user_id: to,
     client_id: `wcc-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
     message_type: MSG_TYPE_BOT,
@@ -305,8 +311,8 @@ async function sendMessageWithRateLimit(
       const errcode = json?.errcode;
       const errmsg = json?.errmsg;
 
-      // Success: {} or { ret: 0 }
-      if (ret === undefined || (ret === 0 && (errcode === undefined || errcode === 0))) {
+      // Success: {} or { ret: 0 } AND no error code
+      if ((ret === undefined || ret === 0) && (errcode === undefined || errcode === 0)) {
         return { success: true, msgId: json?.resp?.msg_id || json?.msg_id };
       }
 

@@ -55,27 +55,55 @@ function isBridgeRunning(pid: number): boolean {
   }
 }
 
+/** Kill a process by PID. Uses taskkill on Windows for reliability. */
+function killProcess(pid: number): void {
+  try {
+    if (process.platform === 'win32') {
+      execSync(`taskkill /PID ${pid} /F /T`, { stdio: 'ignore', timeout: 5000 });
+    } else {
+      process.kill(pid, 'SIGTERM');
+    }
+  } catch {}
+}
+
+/** Find and kill ALL wechat-claude-skill bridge/setup zombie processes. */
+function killAllZombieProcesses(): void {
+  if (process.platform !== 'win32') return;
+  try {
+    // Find all node processes running our bridge.js or setup.js
+    const output = execSync(
+      'wmic process where "Name=\'node.exe\'" get ProcessId,CommandLine /format:csv',
+      { encoding: 'utf-8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    const myDir = import.meta.dirname.replace(/\\/g, '\\\\');
+    for (const line of output.split('\n')) {
+      if (!line.includes('bridge.js') && !line.includes('setup.js')) continue;
+      if (!line.includes('.wechat-claude-skill')) continue;
+      const match = line.match(/,(\d+)\s*$/);
+      if (match) {
+        const pid = parseInt(match[1], 10);
+        if (pid !== process.pid) {
+          killProcess(pid);
+        }
+      }
+    }
+  } catch {}
+}
+
 function stopExistingBridge(): void {
-  // Kill by saved PID first
+  // 1. Kill by saved PID (fast path)
   const state = loadState();
   if (state && isBridgeRunning(state.pid)) {
     console.log(`Stopping existing bridge (PID ${state.pid})...`);
-    try { process.kill(state.pid, 'SIGTERM'); } catch {}
+    killProcess(state.pid);
     const start = Date.now();
     while (Date.now() - start < 3000) {
       if (!isBridgeRunning(state.pid)) break;
     }
   }
 
-  // Also kill any process listening on port 3456
-  try {
-    const result = execSync('powershell -Command "Get-NetTCPConnection -LocalPort 3456 -ErrorAction SilentlyContinue | Select-Object OwningProcess"', { encoding: 'utf-8' });
-    const pids = result.split('\n').map((s: string) => parseInt(s.trim())).filter((p: number) => p > 0 && p !== process.pid);
-    for (const pid of pids) {
-      console.log(`Killing process on port 3456 (PID ${pid})...`);
-      try { process.kill(pid, 'SIGTERM'); } catch {}
-    }
-  } catch {}
+  // 2. Kill any zombie bridge/setup processes (belt and suspenders)
+  killAllZombieProcesses();
 
   try { unlinkSync(BRIDGE_PID_FILE); } catch {}
   try { unlinkSync(STATE_FILE); } catch {}
@@ -165,7 +193,12 @@ function removeHookConfig(): void {
   } catch {}
 }
 
-function startBridgeDetached(mode: 'cli' | 'vscode', sessionId?: string): void {
+/**
+ * Spawn bridge as a detached background process.
+ * Returns a Promise that resolves when bridge signals BRIDGE_READY (or on timeout).
+ * Pipes are destroyed after readiness so the parent process can exit cleanly.
+ */
+function startBridgeDetached(mode: 'cli' | 'vscode', sessionId?: string): Promise<void> {
   const bridgePath = join(import.meta.dirname, 'bridge.js');
   const args = [bridgePath, '--mode', mode];
   if (sessionId) args.push('--session', sessionId);
@@ -179,25 +212,47 @@ function startBridgeDetached(mode: 'cli' | 'vscode', sessionId?: string): void {
 
   child.unref();
 
-  let output = '';
-  child.stdout?.on('data', (data) => {
-    output += data.toString();
-    const match = output.match(/BRIDGE_READY:(\d+)/);
-    if (match) {
-      const pid = parseInt(match[1], 10);
-      saveState({ mode, pid, startedAt: new Date().toISOString(), sessionId, cwd: process.cwd() });
-      console.log(`Bridge started (PID ${pid})`);
-    }
-  });
+  return new Promise((resolve) => {
+    let resolved = false;
 
-  child.stderr?.on('data', (data) => {
-    console.error(`Bridge error: ${data.toString()}`);
-  });
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      resolve();
+    };
 
-  child.on('exit', (code) => {
-    if (code !== 0 && code !== null) {
-      console.error(`Bridge exited with code ${code}`);
-    }
+    let output = '';
+    child.stdout?.on('data', (data) => {
+      output += data.toString();
+      const match = output.match(/BRIDGE_READY:(\d+)/);
+      if (match && !resolved) {
+        const pid = parseInt(match[1], 10);
+        saveState({ mode, pid, startedAt: new Date().toISOString(), sessionId, cwd: process.cwd() });
+        console.log(`Bridge started (PID ${pid})`);
+        finish();
+      }
+    });
+
+    child.stderr?.on('data', (data) => {
+      console.error(`Bridge error: ${data.toString()}`);
+    });
+
+    child.on('exit', (code) => {
+      if (code !== 0 && code !== null) {
+        console.error(`Bridge exited with code ${code}`);
+      }
+      finish();
+    });
+
+    // Safety timeout: if bridge doesn't signal ready within 15s, exit anyway
+    setTimeout(() => {
+      if (!resolved) {
+        console.error('Bridge failed to start within 15 seconds');
+        finish();
+      }
+    }, 15000);
   });
 }
 
@@ -219,7 +274,7 @@ async function setupCli(): Promise<void> {
   console.log('Starting WeChat binding (CLI mode)...\n');
 
   stopExistingBridge();
-  await ensureAccount();
+  await ensureAccount();  // Auto-login if needed
 
   // Session ID can come from:
   // 1. CLI argument: wechat-claude-skill cli <sessionId>
@@ -253,16 +308,22 @@ async function setupVscode(): Promise<void> {
   console.log('Setting up WeChat binding (VSCode mode)...\n');
 
   stopExistingBridge();  // Clean up any existing bridge
-  await ensureAccount();  // Check/create account
+  await ensureAccount();  // Auto-login if needed (QR code shown inline)
   writeHookConfig();  // Write hook config
 
+  // Start bridge in background to maintain getUpdates long-polling connection.
+  // Without this, iLink accepts sendMessage but never delivers to WeChat.
+  // Await BRIDGE_READY so the parent process doesn't exit before bridge is up.
+  await startBridgeDetached('vscode');
+
   console.log('\n✅ 微信通知已启动 (VSCode 模式)');
+  console.log('   ⚠️  请立即在微信中给你刚绑定的 Bot 发一条消息（任意内容）');
+  console.log('   这是激活 Bot 的必要步骤 — 之后 Claude 回复才会推送到微信');
   console.log('   Claude 回复将自动推送到微信（单向通知）');
-  console.log('   如需双向通信，请使用 CLI 模式');
 }
 
 // --- Install: Install skill + hook to global ---
-function installSkill(): void {
+async function installSkill(): Promise<void> {
   console.log('Installing wechat-claude-skill...\n');
 
   // Check if running from a persistent location (global install) or temporary (npx)
@@ -282,10 +343,13 @@ function installSkill(): void {
     process.exit(1);
   }
 
-  // 1. Write hook config to global settings
+  // 1. QR login (one-time setup, interactive)
+  await ensureAccount();
+
+  // 2. Write hook config to global settings
   writeHookConfig();
 
-  // 2. Generate and write SKILL.md to global skills directory
+  // Generate and write SKILL.md to global skills directory
   const skillContent = `---
 name: wechat
 description: Sync Claude Code conversations to WeChat. Use when user runs /wechat to enable WeChat notifications or bidirectional communication.
@@ -313,13 +377,9 @@ When the user runs \`/wechat\`, do the following:
 
 3. After running the command:
    - For CLI: Tell the user "微信双向绑定已启动，Claude Code 将自动重启.." then EXIT this session
-   - For VSCode: Tell the user the binding is complete. Claude replies will be pushed to WeChat automatically.
-
-## Features
-
-- **VSCode 模式**: Stop hook → 微信单向通知
-- **CLI 模式**: Stop hook → 微信通知 + PTY 注入双向通信
-- 使用 iLink Bot API，无需登录微信
+   - For VSCode: Tell the user:
+     "✅ 微信通知已绑定成功！请立即在微信中给你刚绑定的 Bot 发一条消息（任意内容），这是激活 Bot 的必要步骤。之后 Claude 的回复就会自动推送到微信了。"
+   - **IMPORTANT**: Always remind the user to send a message to the Bot first — the Bot won't work until activated by a user message.
 
 ## Uninstall
 
@@ -383,10 +443,13 @@ function uninstallSkill(): void {
 }
 
 // --- Main ---
+// Kill zombie processes on every invocation
+killAllZombieProcesses();
+
 const action = process.argv[2];
 switch (action) {
   case 'install':
-    installSkill();
+    installSkill().catch((e) => { console.error('Install failed:', e.message); process.exit(1); });
     break;
   case 'uninstall':
     uninstallSkill();
