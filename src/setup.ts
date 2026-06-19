@@ -268,6 +268,23 @@ function unbind(): void {
 function installSkill(): void {
   console.log('Installing wechat-claude-skill...\n');
 
+  // Check if running from a persistent location (global install) or temporary (npx)
+  const isNpxTemp = import.meta.dirname.includes('_npx') || 
+                    import.meta.dirname.includes('npm-cache') ||
+                    import.meta.dirname.includes('Temp') ||
+                    import.meta.dirname.includes('tmp');
+
+  if (isNpxTemp) {
+    console.log('⚠️  WARNING: Running from temporary npx cache!');
+    console.log('   The hook path will be invalid after npx cache cleanup.');
+    console.log('   Please install globally instead:');
+    console.log('');
+    console.log('   npm install -g wechat-claude-skill');
+    console.log('   wechat-claude-skill install');
+    console.log('');
+    process.exit(1);
+  }
+
   // 1. Write hook config to global settings
   writeHookConfig();
 
@@ -289,12 +306,12 @@ When the user runs \`/wechat\`, do the following:
 
    **For CLI terminal:**
    \`\`\`bash
-   node "${SETUP_PATH}" cli
+   wechat-claude-skill cli
    \`\`\`
 
    **For VSCode:**
    \`\`\`bash
-   node "${SETUP_PATH}" vscode
+   wechat-claude-skill vscode
    \`\`\`
 
 3. After running the command:
@@ -309,7 +326,7 @@ When the user runs \`/wechat\`, do the following:
 
 ## Uninstall
 
-Run \`/unwechat\` or \`npx wechat-claude-skill uninstall\`
+Run \`/unwechat\` or \`wechat-claude-skill uninstall\`
 `;
 
   mkdirSync(GLOBAL_SKILL_DIR, { recursive: true });
@@ -327,7 +344,7 @@ description: Unbind WeChat from Claude Code. Use when user runs /unwechat to dis
 When the user runs \`/unwechat\`, run:
 
 \`\`\`bash
-node "${SETUP_PATH}" uninstall
+wechat-claude-skill uninstall
 \`\`\`
 
 Tell the user WeChat has been unbound.
