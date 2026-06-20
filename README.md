@@ -15,6 +15,65 @@
 - 🛡️ **消息去重 & 限流**：内置 iLink API 限流退避和会话过期重试
 - 📦 **一键安装**：`npm install -g` + `/wechat` 即可使用
 
+## 安装
+
+### 前置要求
+
+- Node.js >= 18
+- Claude Code CLI（`npm install -g @anthropic-ai/claude-code`）
+- 微信账号（用于扫描 QR 码绑定 Bot）
+
+### 全局安装
+
+```bash
+npm install -g wechat-claude-skill
+```
+
+### 初始化
+
+```bash
+wechat-claude-skill install
+```
+
+这会完成：
+
+1. 将 Skill 和 Hook 写入 `~/.claude/` 全局配置
+2. 安装 `/wechat` 和 `/unwechat` 两个 Slash 命令
+
+> 扫码登录在执行 `/wechat` 时自动触发，无需提前操作。
+
+## 使用
+
+### CLI 模式（推荐）
+
+1. 在终端中启动 Claude Code：
+   ```bash
+   claude
+   ```
+
+2. 输入 `/wechat`，选择「CLI 终端」
+
+3. 自动打开新终端窗口，窗口标题为 `[微信桥接] Claude Code`
+   - 旧窗口可以关闭
+   - 新窗口中 Claude Code 继续之前的对话
+   - 在新窗口中可以手动输入，也可以从微信发消息
+
+4. 在微信中给 Bot 发一条消息激活（首次必须）
+
+### VSCode 模式
+
+1. 在 VSCode 的 Claude Code 中输入 `/wechat`，选择「VSCode」
+2. 扫码绑定后在微信中发一条消息激活
+3. 之后 Claude Code 的回复自动推送到微信（单向通知）
+
+### 解绑
+
+在 Claude Code 中输入 `/unwechat`，或运行：
+
+```bash
+wechat-claude-skill unbind
+```
+
 ## 架构
 
 项目有两种运行模式，根据使用场景选择：
@@ -87,62 +146,7 @@
 
 简而言之：**spawn 无法让 Claude Code 正常运行，也无法让微信消息实时注入到正在运行的 Claude Code 会话中**。
 
-## 安装
 
-### 前置要求
-
-- Node.js >= 18
-- Claude Code CLI（`npm install -g @anthropic-ai/claude-code`）
-- 微信账号（用于扫描 QR 码绑定 Bot）
-
-### 全局安装
-
-```bash
-npm install -g wechat-claude-skill
-```
-
-### 初始化
-
-```bash
-wechat-claude-skill install
-```
-
-这会完成：
-1. QR 扫码登录（终端显示 + 自动打开浏览器）
-2. 将 Skill 和 Hook 写入 `~/.claude/` 全局配置
-3. 安装 `/wechat` 和 `/unwechat` 两个 Slash 命令
-
-## 使用
-
-### CLI 模式（推荐）
-
-1. 在终端中启动 Claude Code：
-   ```bash
-   claude
-   ```
-
-2. 输入 `/wechat`，选择「CLI 终端」
-
-3. 自动打开新终端窗口，窗口标题为 `[微信桥接] Claude Code`
-   - 旧窗口可以关闭
-   - 新窗口中 Claude Code 继续之前的对话
-   - 在新窗口中可以手动输入，也可以从微信发消息
-
-4. 在微信中给 Bot 发一条消息激活（首次必须）
-
-### VSCode 模式
-
-1. 在 VSCode 的 Claude Code 中输入 `/wechat`，选择「VSCode」
-2. 扫码绑定后在微信中发一条消息激活
-3. 之后 Claude Code 的回复自动推送到微信（单向通知）
-
-### 解绑
-
-在 Claude Code 中输入 `/unwechat`，或运行：
-
-```bash
-wechat-claude-skill unbind
-```
 
 ## 项目结构
 
@@ -169,34 +173,6 @@ src/
 | `queue.ts` | 线程安全的 FIFO 队列，支持去重（msgId）和 `requeue`（未消费消息回队列） |
 | `auth.ts` | QR 码登录流程：获取二维码 → 终端显示 + 自动打开浏览器 → 1 秒轮询扫码状态 |
 
-## 核心技术细节
-
-### Bracketed Paste 注入
-
-Claude Code 启用了 bracketed paste mode（`\x1b[?2004h`），这意味着直接 `write(text + '\r')` 不会触发输入提交——文字会出现在输入框但不会发送。正确的注入方式：
-
-```typescript
-// ✅ 正确：用 bracketed paste 序列包裹 + 延迟发送 Enter
-this.ptyProcess.write('\x1b[200~' + text + '\x1b[201~');
-setTimeout(() => this.ptyProcess.write('\r'), 50);
-
-// ❌ 错误：直接写入，文字出现但不提交
-this.ptyProcess.write(text + '\r');
-```
-
-### Claude Code 就绪检测
-
-Claude Code 启动时会输出大量欢迎信息，其中包含 `>` 字符（如 "What's new >"）。必须只检测 `❯`（Claude Code 独有的输入提示符）来判断就绪，否则会在 Claude Code 未准备好时注入消息导致消息丢失。
-
-### 消息注入节奏控制
-
-注入消息后，PTY 会立即 echo 回 `❯ <injected text>`。如果此时立即注入下一条消息，会因为 Claude Code 还在处理上一条而丢失。解决方案：
-
-1. 注入后标记 `claudeBusy = true`
-2. 等待至少 5 秒（`MIN_BUSY_MS`），避免误判 echo 的 `❯` 为空闲信号
-3. 5 秒后如果再看到 `❯`，说明 Claude Code 已完成响应，标记为空闲
-4. 每次只注入一条消息，等 Claude Code 完成后再注入下一条
-
 ## 已知问题 & 待改进
 
 ### 当前问题
@@ -222,7 +198,6 @@ Claude Code 启动时会输出大量欢迎信息，其中包含 `>` 字符（如
 
 - [wechat-claude-code](https://github.com/Wechat-ggGitHub/wechat-claude-code) — 本项目的灵感来源，提供了 iLink Bot API 的实现思路
 - [node-pty](https://github.com/microsoft/node-pty) — Microsoft 维护的跨平台伪终端库
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic 的 AI 编程助手
 
 ## License
 

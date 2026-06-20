@@ -483,10 +483,8 @@ async function installSkill(): Promise<void> {
     process.exit(1);
   }
 
-  // 1. QR login (one-time setup, interactive)
-  await ensureAccount();
-
-  // 2. Write hook config to global settings
+  // 1. Write hook config to global settings (no QR login needed here;
+  //    login happens when user runs /wechat cli or /wechat vscode)
   writeHookConfig();
 
   // Generate and write SKILL.md to global skills directory
