@@ -91,7 +91,7 @@ rm -f ~/.wechat-claude-skill/state.json
 ## 快速验证命令
 
 ```bash
-cd C:\Users\1\Desktop\开源项目\wechat-claude-skill
+cd wechat-claude-skill
 
 # 编译
 npx tsc

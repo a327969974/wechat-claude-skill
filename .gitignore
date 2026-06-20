@@ -1,5 +1,30 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 *.js.map
+
+# Claude Code settings (may contain API keys)
 .claude/settings.json
 .claude/settings.local.json
+
+# Runtime data (contains user tokens and session state)
+.wechat-claude-skill/
+
+# Test data (may contain real conversation content)
+test-transcript.jsonl
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment files
+.env
+.env.*
