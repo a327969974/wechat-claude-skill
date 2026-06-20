@@ -137,19 +137,11 @@ export class PTYServer {
         // \x1b]2;...\x07 = set window title
         this.terminal.output.write('\x1b]2;📱 微信双向通信窗口 — WeChat Bridge\x07');
         this.log('Banner set: window title');
-
-        // Inject a startup message into Claude Code.
-        // This makes the reminder part of the conversation (not terminal output
-        // that gets overwritten by Claude Code's TUI alternate screen buffer).
-        this.claudeBusy = true;
-        this.lastInjectTime = Date.now();
-        setTimeout(() => {
-          if (this.ptyProcess) {
-            const reminder = '系统提示：微信双向通信已启动！微信发消息会自动注入此窗口，你的回复会自动推送到微信。请简短确认。';
-            this.log('Injecting startup reminder');
-            this.ptyProcess.write(reminder + '\r');
-          }
-        }, 500);
+        // Do NOT inject any message into Claude Code here.
+        // --continue resumes the previous conversation, and injecting a message
+        // would cause Claude Code to process it as a new user request,
+        // potentially re-triggering the /wechat skill or other unwanted actions.
+        // The bridge should only inject messages that come from WeChat.
       }
       // Write directly to terminal device
       this.terminal.output.write(data);
@@ -278,8 +270,19 @@ export class PTYServer {
     this.log(`Injecting WeChat message from ${item.from}: ${item.text}`);
     this.claudeBusy = true;
     this.lastInjectTime = Date.now();
-    // Windows ConPTY requires \r for Enter, Unix PTY uses \n
-    this.ptyProcess.write(item.text + '\r');
+    // Claude Code enables bracketed paste mode (\x1b[?2004h).
+    // We must wrap injected text in paste escape sequences, otherwise
+    // the text appears in the input box but \r doesn't trigger submission.
+    // Format: \x1b[200~ <text> \x1b[201~ then send Enter separately.
+    const text = item.text;
+    this.ptyProcess.write('\x1b[200~' + text + '\x1b[201~');
+    // Send Enter (\r = carriage return = Enter key) in a separate write
+    // to ensure the paste is complete before submission.
+    setTimeout(() => {
+      if (this.ptyProcess) {
+        this.ptyProcess.write('\r');
+      }
+    }, 50);
   }
 
   private log(msg: string): void {

@@ -376,100 +376,31 @@ async function setupCli(): Promise<void> {
   await ensureAccount();  // Auto-login if needed
   writeHookConfig();
 
-  // Find the Claude Code process that invoked us (so we can close it later)
-  // When user runs /wechat in Claude Code, it executes `wechat-claude-skill cli`
-  // via Bash. The process tree is: claude → bash → node (setup.js cli)
-  // We want to find and kill the claude process after the new window opens.
-  const claudePid = findClaudeParentPid();
-
   // Start bridge in a NEW terminal window
   // The PTY inside will run `claude --continue` to resume the most recent conversation
   console.log('📱 正在打开新终端窗口...');
-  await startBridgeInNewTerminal('cli', undefined, claudePid);
+  await startBridgeInNewTerminal('cli');
 
   console.log('');
   console.log('✅ 微信双向绑定已启动！');
   console.log('   📺 新终端窗口已打开，Claude Code 将在该窗口中运行');
   console.log('   📱 微信发消息 → 自动注入到 Claude');
   console.log('   💬 Claude 回复 → 自动推送到微信');
-  if (claudePid) {
-    console.log(`   🔒 旧窗口将在 3 秒后自动关闭 (PID ${claudePid})`);
-  } else {
-    console.log('');
-    console.log('💡 请输入 /exit 退出当前 Claude Code 会话');
-  }
+  console.log('');
+  console.log('💡 请输入 /exit 退出当前 Claude Code 会话');
   console.log('   然后切换到新打开的终端窗口继续对话');
-}
-
-/**
- * Find the Claude Code process that is the parent/ancestor of this process.
- * Walks up the process tree from current PID looking for a process
- * whose command line contains 'claude'.
- * Returns the PID if found, undefined otherwise.
- */
-function findClaudeParentPid(): number | undefined {
-  if (process.platform !== 'win32') return undefined;
-  try {
-    // Walk up the process tree from our parent
-    let pid = process.ppid;
-    const visited = new Set<number>();
-    while (pid && !visited.has(pid)) {
-      visited.add(pid);
-      const output = execSync(
-        `wmic process where "ProcessId=${pid}" get ParentProcessId,CommandLine /FORMAT:LIST`,
-        { encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] },
-      );
-      const cmdMatch = output.match(/CommandLine=(.+)/);
-      const ppidMatch = output.match(/ParentProcessId=(\d+)/);
-      if (cmdMatch) {
-        const cmdLine = cmdMatch[1].trim();
-        // Check if this is a Claude Code process (claude.cmd or node running claude)
-        if (cmdLine.includes('claude.cmd') || cmdLine.includes('claude') && cmdLine.includes('--continue')) {
-          return pid;
-        }
-      }
-      if (ppidMatch) {
-        pid = parseInt(ppidMatch[1], 10);
-      } else {
-        break;
-      }
-    }
-  } catch {}
-  return undefined;
 }
 
 /**
  * Start bridge in a new terminal window (visible PTY).
  * Uses a Node.js launcher script to avoid Windows .bat encoding issues
  * with Chinese characters in paths.
- *
- * @param claudePid - PID of the old Claude Code process to kill after new window opens.
- *                     If provided, the launcher will wait 3 seconds then kill this process.
  */
-async function startBridgeInNewTerminal(mode: 'cli' | 'vscode', sessionId?: string, claudePid?: number): Promise<void> {
+async function startBridgeInNewTerminal(mode: 'cli' | 'vscode', sessionId?: string): Promise<void> {
   const bridgePath = join(import.meta.dirname, '..', 'dist', 'bridge.js');
 
   // Write a Node.js launcher script (avoids .bat encoding issues)
   const launcherPath = join(BRIDGE_DIR, 'cli-launcher.js');
-  const killOldClaudeCmd = claudePid
-    ? `
-// Kill the old Claude Code process after a delay
-setTimeout(() => {
-  try {
-    const { execSync } = require('child_process');
-    console.log('\\x1b[1;33m正在关闭旧窗口 (PID ${claudePid})...\\x1b[0m');
-    if (process.platform === 'win32') {
-      execSync('taskkill /PID ${claudePid} /F /T', { stdio: 'ignore', timeout: 5000 });
-    } else {
-      process.kill(${claudePid}, 'SIGTERM');
-    }
-    console.log('\\x1b[1;32m✅ 旧窗口已关闭\\x1b[0m');
-  } catch (e) {
-    console.log('\\x1b[1;31m⚠️ 旧窗口关闭失败，请手动输入 /exit 退出\\x1b[0m');
-  }
-}, 3000);`
-    : '';
-
   const launcherContent = `
 const { spawn } = require('child_process');
 const path = require('path');
@@ -487,7 +418,6 @@ console.log('\\x1b[1;36m' + '═'.repeat(60) + '\\x1b[0m');
 console.log('');
 console.log('正在启动 Claude Code...');
 console.log('');
-${killOldClaudeCmd}
 
 const bridgePath = ${JSON.stringify(bridgePath)};
 const args = [bridgePath, '--mode', '${mode}'${sessionId && mode === 'vscode' ? `, '--session', '${sessionId}'` : ''}, '--cwd', process.cwd()];
