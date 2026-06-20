@@ -339,63 +339,65 @@ async function waitForActivation(timeoutMs = 60_000): Promise<boolean> {
 async function setupCli(): Promise<void> {
   console.log('Starting WeChat binding (CLI mode)...\n');
 
-  // Session ID can come from:
-  // 1. CLI argument: wechat-claude-skill cli <sessionId>
-  // 2. Environment variable: $CLAUDE_CODE_SESSION_ID (set by Claude Code)
-  let sessionId = process.argv[3] || process.env.CLAUDE_CODE_SESSION_ID;
-  if (!sessionId) {
-    console.log('⚠️  No session ID provided.');
-    console.log('   CLI bidirectional mode requires a session ID.');
-    console.log('   Usage: wechat-claude-skill cli <sessionId>');
-    console.log('   Or run from Claude Code skill (auto-provides $CLAUDE_CODE_SESSION_ID)');
-    console.log('');
-    console.log('   Aborting (use /wechat vscode for VSCode mode)\n');
-    process.exit(1);
-  }
-
-  // Only stop existing bridge if we have a valid session (going to run CLI mode)
+  // Stop any existing bridge first
   stopExistingBridge();
   await ensureAccount();  // Auto-login if needed
-
   writeHookConfig();
 
-  // Start bridge in a NEW terminal window (so PTY output is visible)
-  // This opens a new CMD window where the Claude Code session will run
+  // Start bridge in a NEW terminal window
+  // The PTY inside will run `claude --continue` to resume the most recent conversation
   console.log('📱 正在打开新终端窗口...');
-  await startBridgeInNewTerminal('cli', sessionId);
+  await startBridgeInNewTerminal('cli');
 
-  console.log('✅ 微信双向绑定已启动');
+  console.log('');
+  console.log('✅ 微信双向绑定已启动！');
   console.log('   📺 新终端窗口已打开，Claude Code 将在该窗口中运行');
   console.log('   📱 微信发消息 → 自动注入到 Claude');
   console.log('   💬 Claude 回复 → 自动推送到微信');
-  console.log('\n💡 使用方式：');
-  console.log('   1. 在新打开的终端窗口中与 Claude 对话');
-  console.log('   2. 同时可以在微信中发送消息，会自动注入到该终端');
-  console.log('   3. 按 Ctrl+C 退出');
+  console.log('');
+  console.log('💡 下一步：');
+  console.log('   1. 输入 /exit 退出当前 Claude Code 会话');
+  console.log('   2. 切换到新打开的终端窗口继续对话');
+  console.log('   3. 同时可以在微信中发消息，会自动注入到该终端');
 }
 
 /**
  * Start bridge in a new terminal window (visible PTY).
- * This opens a CMD window where the PTY runs, so user can see Claude Code.
+ * Creates a .bat launcher file and opens it with `start`.
+ * This avoids Windows `start` command quoting issues.
  */
 async function startBridgeInNewTerminal(mode: 'cli' | 'vscode', sessionId?: string): Promise<void> {
   const bridgePath = join(import.meta.dirname, '..', 'dist', 'bridge.js');
   const args = [bridgePath, '--mode', mode];
-  if (sessionId) args.push('--session', sessionId);
+  if (sessionId && mode === 'vscode') {
+    args.push('--session', sessionId);
+  }
   args.push('--cwd', process.cwd());
 
-  // Use start command to open new CMD window, then run node in that window
-  // /K keeps the window open after command completes
-  const cmd = `start "Claude Code - WeChat Bridge" cmd /K node ${args.map(a => `"${a}"`).join(' ')}`;
+  // Write a .bat launcher to avoid Windows `start` quoting issues
+  const batPath = join(BRIDGE_DIR, 'cli-launcher.bat');
+  const nodeCmd = `node "${bridgePath}" --mode ${mode}${sessionId && mode === 'vscode' ? ` --session "${sessionId}"` : ''} --cwd "${process.cwd()}"`;
+  const batContent = `@echo off
+title Claude Code - WeChat Bridge
+echo 正在启动微信双向通信...
+echo.
+${nodeCmd}
+echo.
+echo 会话已结束，按任意键退出...
+pause >nul
+`;
+  mkdirSync(BRIDGE_DIR, { recursive: true });
+  writeFileSync(batPath, batContent, 'utf-8');
 
-  spawn('cmd', ['/c', cmd], {
+  // Open the .bat file in a new CMD window
+  spawn('cmd', ['/c', 'start', batPath], {
     detached: true,
     stdio: 'ignore',
     shell: false,
   }).unref();
 
-  // Wait a bit for the new window to open
-  await new Promise(r => setTimeout(r, 1000));
+  // Wait for new window to open
+  await new Promise(r => setTimeout(r, 1500));
 }
 
 // --- VSCode mode ---
@@ -459,11 +461,11 @@ When the user runs \`/wechat\`, do the following:
    - "1. CLI 终端（双向通信：可从微信回复）"
    - "2. VSCode（单向通知：仅推送 Claude 回复）"
 
-2. Based on their choice, run the appropriate command:
+2. Based on their choice, run the appropriate command **immediately without asking for confirmation**:
 
    **For CLI terminal:**
    \`\`\`bash
-   wechat-claude-skill cli "$CLAUDE_CODE_SESSION_ID"
+   wechat-claude-skill cli
    \`\`\`
 
    **For VSCode:**
@@ -472,15 +474,15 @@ When the user runs \`/wechat\`, do the following:
    \`\`\`
 
 3. After running the command:
-   - For CLI: Tell the user:
-     "✅ 微信双向绑定已启动！已自动打开新终端窗口，Claude Code 将在该窗口中运行。
-     你可以：
-     - 在新终端窗口中与 Claude 对话
-     - 同时在微信中发消息，会自动注入到 Claude
-     当前会话可以退出（输入 /exit 或 Ctrl+C）"
-   - For VSCode: Tell the user:
+   - For CLI: Tell the user in Chinese:
+     "✅ 微信双向绑定已启动！已自动打开新终端窗口。
+     请输入 /exit 退出当前会话，然后切换到新窗口继续对话。
+     在新窗口中你可以和 Claude 对话，也可以在微信中发消息自动注入。"
+   - For VSCode: Tell the user in Chinese:
      "✅ 微信通知已绑定成功！请立即在微信中给你刚绑定的 Bot 发一条消息（任意内容），这是激活 Bot 的必要步骤。之后 Claude 的回复就会自动推送到微信了。"
-   - **IMPORTANT**: Always remind the user to send a message to the Bot first — the Bot won't work until activated by a user message.
+   - **IMPORTANT**: Always remind the user to send a message to the Bot first.
+
+**IMPORTANT**: All user-facing messages must be in Chinese (中文). Never show English prompts or approval requests.
 
 ## Unbind
 

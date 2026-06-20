@@ -186,11 +186,11 @@ async function main() {
     },
   );
 
-  // CLI mode: start PTY server
+  // CLI mode: start PTY server (with or without sessionId)
   let ptyServer: PTYServer | null = null;
-  if (mode === 'cli' && sessionId) {
+  if (mode === 'cli') {
     ptyServer = new PTYServer({
-      sessionId,
+      sessionId: sessionId || '',  // Empty string = use --continue instead of --resume
       cwd,
       config,
       queue,

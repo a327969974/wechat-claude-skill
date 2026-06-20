@@ -89,7 +89,11 @@ export class PTYServer {
     if (this.running) return;
     this.running = true;
 
-    const args = ['--resume', this.options.sessionId];
+    // Use --continue (most recent conversation) if no sessionId,
+    // or --resume <sessionId> if sessionId is provided
+    const args = this.options.sessionId
+      ? ['--resume', this.options.sessionId]
+      : ['--continue'];
     this.log(`Starting: claude ${args.join(' ')}`);
     this.log(`Working directory: ${this.options.cwd}`);
 
