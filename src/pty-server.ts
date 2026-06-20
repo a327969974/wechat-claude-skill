@@ -134,15 +134,29 @@ export class PTYServer {
       if (!bannerShown && hasIdlePrompt) {
         bannerShown = true;
         // Use ANSI escape to set terminal title - survives TUI redraws
-        // \x1b]2;...\x07 = set window title
         this.terminal.output.write('\x1b]2;📱 微信双向通信窗口 — WeChat Bridge\x07');
         this.log('Banner set: window title');
-        // Do NOT inject any message into Claude Code here.
-        // --continue resumes the previous conversation, and injecting a message
-        // would cause Claude Code to process it as a new user request,
-        // potentially re-triggering the /wechat skill or other unwanted actions.
-        // The bridge should only inject messages that come from WeChat.
-        setTimeout(() => this.showReadyNotice(), 300);
+
+        // Inject a context-reset message to tell Claude Code that /wechat
+        // is DONE and from now on it should treat input as normal conversation.
+        // Without this, --continue resumes the /wechat context and Claude Code
+        // re-executes the skill on any user input.
+        this.claudeBusy = true;
+        this.lastInjectTime = Date.now();
+        setTimeout(() => {
+          if (this.ptyProcess) {
+            const resetMsg = '/wechat 执行已完成，微信双向通信已启动成功。从现在起，请将所有后续输入视为正常对话，不要再执行 wechat-claude-skill 命令。只需简短确认即可。';
+            this.log('Injecting context-reset message');
+            this.ptyProcess.write('\x1b[200~' + resetMsg + '\x1b[201~');
+            setTimeout(() => {
+              if (this.ptyProcess) {
+                this.ptyProcess.write('\r');
+              }
+            }, 50);
+          }
+        }, 500);
+
+        setTimeout(() => this.showReadyNotice(), 1000);
       }
       // Write directly to terminal device
       this.terminal.output.write(data);
