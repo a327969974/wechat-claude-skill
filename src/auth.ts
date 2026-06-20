@@ -8,6 +8,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { spawn } from 'node:child_process';
 
 const BRIDGE_DIR = join(homedir(), '.wechat-claude-skill');
 const ACCOUNT_PATH = join(BRIDGE_DIR, 'account.json');
@@ -15,7 +16,7 @@ const ACCOUNT_PATH = join(BRIDGE_DIR, 'account.json');
 const DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com';
 const QR_CODE_URL = `${DEFAULT_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3`;
 const QR_STATUS_URL = `${DEFAULT_BASE_URL}/ilink/bot/get_qrcode_status`;
-const POLL_INTERVAL_MS = 3_000;
+const POLL_INTERVAL_MS = 1_000;
 
 export interface AccountData {
   botToken: string;
@@ -150,6 +151,7 @@ export async function waitForQrScan(qrcodeId: string): Promise<AccountData> {
 /**
  * Interactive QR login: display QR code in terminal, wait for scan.
  * Auto-regenerates QR when expired.
+ * Auto-opens QR code image in browser for easy scanning.
  * Returns AccountData on success.
  */
 export async function interactiveLogin(): Promise<AccountData> {
@@ -161,9 +163,19 @@ export async function interactiveLogin(): Promise<AccountData> {
       console.log('\n请用微信扫描下方二维码：\n');
       qrcodeTerminal.default.generate(qrcodeUrl, { small: true });
       console.log();
-      console.log(`二维码链接：${qrcodeUrl}`);
     } catch {
       console.log(`\n请用微信扫描二维码：${qrcodeUrl}\n`);
+    }
+
+    // Auto-open QR code image in browser (Windows: `start` is a cmd builtin)
+    try {
+      const opener = process.platform === 'win32'
+        ? spawn('cmd', ['/c', 'start', '', qrcodeUrl], { detached: true, stdio: 'ignore' })
+        : spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [qrcodeUrl], { detached: true, stdio: 'ignore' });
+      opener.unref();
+      console.log('📱 已自动在浏览器中打开二维码图片');
+    } catch {
+      console.log(`📱 或者点击链接打开：${qrcodeUrl}`);
     }
 
     console.log('等待扫码（二维码过期自动刷新）...');

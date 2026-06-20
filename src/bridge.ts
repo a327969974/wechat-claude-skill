@@ -94,6 +94,7 @@ async function main() {
 
   log(`Account: ${account.accountId}, toUserId: ${config.toUserId}`);
   const queue = new MessageQueue();
+  let activated = false;  // Track if any user message has been received
 
   // Create Express app
   const app = express();
@@ -108,7 +109,7 @@ async function main() {
 
   // Health check
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', mode, queueLength: queue.length });
+    res.json({ status: 'ok', mode, queueLength: queue.length, activated });
   });
 
   // Stop hook endpoint - receives Claude's response
@@ -165,6 +166,8 @@ async function main() {
       for (const msg of messages) {
         log(`  msg: isSystem=${msg.isSystem} isBot=${msg.isBot} text=${msg.text?.slice(0, 50)}`);
         if (msg.isSystem || msg.isBot) continue;
+
+        activated = true;  // Mark as activated when first user message is received
 
         const enqueued = queue.enqueue({
           msgId: msg.msgId,

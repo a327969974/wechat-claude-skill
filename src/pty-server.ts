@@ -38,15 +38,19 @@ interface TerminalStreams {
  * Open the terminal device directly.
  * Returns {input, output} streams connected to the terminal.
  * Falls back to process.stdin/stdout if already a TTY.
+ *
+ * Windows Note: Use \\.\CONIN$ and \\.\CONOUT$ full device paths because
+ * Node.js createReadStream/createWriteStream don't recognize CONIN$/CONOUT$
+ * as device names (they treat them as relative file paths).
  */
 function openTerminal(): TerminalStreams {
   if (process.stdout.isTTY && process.stdin.isTTY) {
     return { input: process.stdin, output: process.stdout };
   }
 
-  // Detached process: open terminal device directly
-  const ttyPath = process.platform === 'win32' ? 'CONOUT$' : '/dev/tty';
-  const ttyInPath = process.platform === 'win32' ? 'CONIN$' : '/dev/tty';
+  // Windows: use full device path with \\.\ prefix
+  const ttyPath = process.platform === 'win32' ? '\\\\.\\CONOUT$' : '/dev/tty';
+  const ttyInPath = process.platform === 'win32' ? '\\\\.\\CONIN$' : '/dev/tty';
 
   try {
     const output = createWriteStream(ttyPath);

@@ -309,19 +309,45 @@ async function runBridgeDirectly(mode: 'cli' | 'vscode', sessionId?: string): Pr
   await import(bridgeUrl);
 }
 
+/**
+ * Wait for the bridge to receive the first user message (Bot activation).
+ * Polls the /health endpoint until `activated` is true or timeout.
+ * Returns true if activated, false if timeout.
+ */
+async function waitForActivation(timeoutMs = 60_000): Promise<boolean> {
+  console.log('⏳ 等待微信激活（请给 Bot 发一条消息，任意内容即可）...');
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/health`);
+      const data = await res.json() as any;
+      if (data.activated) {
+        console.log('✅ Bot 已激活！微信消息通道已就绪\n');
+        return true;
+      }
+    } catch {
+      // Bridge not ready yet, retry
+    }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  console.log('⚠️  等待超时（60秒），Bot 可能未激活。');
+  console.log('   请确保已在微信中给 Bot 发送了一条消息。\n');
+  return false;
+}
+
 // --- CLI mode ---
 async function setupCli(): Promise<void> {
   console.log('Starting WeChat binding (CLI mode)...\n');
 
   // Session ID can come from:
   // 1. CLI argument: wechat-claude-skill cli <sessionId>
-  // 2. Environment variable: $CLAUDE_SESSION_ID (set by Claude Code)
-  let sessionId = process.argv[3] || process.env.CLAUDE_SESSION_ID;
+  // 2. Environment variable: $CLAUDE_CODE_SESSION_ID (set by Claude Code)
+  let sessionId = process.argv[3] || process.env.CLAUDE_CODE_SESSION_ID;
   if (!sessionId) {
     console.log('⚠️  No session ID provided.');
     console.log('   CLI bidirectional mode requires a session ID.');
     console.log('   Usage: wechat-claude-skill cli <sessionId>');
-    console.log('   Or run from Claude Code skill (auto-provides $CLAUDE_SESSION_ID)');
+    console.log('   Or run from Claude Code skill (auto-provides $CLAUDE_CODE_SESSION_ID)');
     console.log('');
     console.log('   Aborting (use /wechat vscode for VSCode mode)\n');
     process.exit(1);
@@ -339,6 +365,7 @@ async function setupCli(): Promise<void> {
   console.log('   按 Ctrl+C 退出\n');
 
   // Run bridge directly (blocking, user interacts in terminal)
+  // Bridge starts HTTP server + PTY + polling, waitForActivation works after that
   await runBridgeDirectly('cli', sessionId);
 }
 
@@ -355,9 +382,10 @@ async function setupVscode(): Promise<void> {
   // Await BRIDGE_READY so the parent process doesn't exit before bridge is up.
   await startBridgeDetached('vscode');
 
-  console.log('\n✅ 微信通知已启动 (VSCode 模式)');
-  console.log('   ⚠️  请立即在微信中给你刚绑定的 Bot 发一条消息（任意内容）');
-  console.log('   这是激活 Bot 的必要步骤 — 之后 Claude 回复才会推送到微信');
+  // Wait for Bot activation (first user message received)
+  await waitForActivation(60000);
+
+  console.log('✅ 微信通知已启动 (VSCode 模式)');
   console.log('   Claude 回复将自动推送到微信（单向通知）');
 }
 
@@ -406,7 +434,7 @@ When the user runs \`/wechat\`, do the following:
 
    **For CLI terminal:**
    \`\`\`bash
-   wechat-claude-skill cli "$CLAUDE_SESSION_ID"
+   wechat-claude-skill cli "$CLAUDE_CODE_SESSION_ID"
    \`\`\`
 
    **For VSCode:**
@@ -420,9 +448,9 @@ When the user runs \`/wechat\`, do the following:
      "✅ 微信通知已绑定成功！请立即在微信中给你刚绑定的 Bot 发一条消息（任意内容），这是激活 Bot 的必要步骤。之后 Claude 的回复就会自动推送到微信了。"
    - **IMPORTANT**: Always remind the user to send a message to the Bot first — the Bot won't work until activated by a user message.
 
-## Uninstall
+## Unbind
 
-Run \`/unwechat\` or \`wechat-claude-skill uninstall\`
+Run \`/unwechat\` or \`wechat-claude-skill unbind\`
 `;
 
   mkdirSync(GLOBAL_SKILL_DIR, { recursive: true });
@@ -440,10 +468,10 @@ description: Unbind WeChat from Claude Code. Use when user runs /unwechat to dis
 When the user runs \`/unwechat\`, run:
 
 \`\`\`bash
-wechat-claude-skill uninstall
+wechat-claude-skill unbind
 \`\`\`
 
-Tell the user WeChat has been unbound.
+Tell the user WeChat has been unbound (skill still installed, use /wechat to re-bind).
 `;
 
   const unwechatDir = join(homedir(), '.claude', 'skills', 'unwechat');
@@ -455,7 +483,27 @@ Tell the user WeChat has been unbound.
   console.log('   Run /wechat in Claude Code to start binding.');
 }
 
-// --- Uninstall: Remove skill + hook from global ---
+// --- Unbind: Stop bridge + remove hook + delete account (keep skill files) ---
+function unbindWeChat(): void {
+  console.log('Unbinding WeChat...\n');
+
+  // 1. Stop bridge
+  stopExistingBridge();
+
+  // 2. Remove hook config
+  removeHookConfig();
+
+  // 3. Delete account.json (user will need to re-scan QR next time)
+  const accountPath = join(BRIDGE_DIR, 'account.json');
+  if (existsSync(accountPath)) {
+    unlinkSync(accountPath);
+    console.log('Account data deleted');
+  }
+
+  console.log('✅ WeChat unbound! (Skill still installed, use /wechat to re-bind)');
+}
+
+// --- Uninstall: Remove everything including skill files ---
 function uninstallSkill(): void {
   console.log('Uninstalling wechat-claude-skill...\n');
 
@@ -508,14 +556,18 @@ switch (action) {
   case 'vscode':
     setupVscode().catch((e) => { console.error('Setup failed:', e.message); process.exit(1); });
     break;
-  case 'unbind':  // Legacy alias for uninstall
+  case 'unbind':
+    unbindWeChat();
+    break;
+  case 'uninstall':
     uninstallSkill();
     break;
   default:
     console.log('wechat-claude-skill - Claude Code WeChat Integration\n');
     console.log('Usage:');
     console.log('  wechat-claude-skill install      Install skill + hook to global');
-    console.log('  wechat-claude-skill uninstall    Remove skill + hook');
+    console.log('  wechat-claude-skill unbind       Unbind WeChat (keep skill, can re-bind)');
+    console.log('  wechat-claude-skill uninstall    Completely remove skill + hook');
     console.log('  wechat-claude-skill vscode       Start VSCode mode (one-way notify)');
     console.log('  wechat-claude-skill cli [sid]    Start CLI mode (bidirectional)');
     process.exit(1);
