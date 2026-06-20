@@ -359,14 +359,43 @@ async function setupCli(): Promise<void> {
 
   writeHookConfig();
 
-  console.log(`\n✅ 微信双向绑定已启动 (CLI 模式, session=${sessionId})`);
-  console.log('   Claude 回复 → 微信：自动推送');
-  console.log('   微信回复 → Claude：PTY 注入（真实用户消息）');
-  console.log('   按 Ctrl+C 退出\n');
+  // Start bridge in a NEW terminal window (so PTY output is visible)
+  // This opens a new CMD window where the Claude Code session will run
+  console.log('📱 正在打开新终端窗口...');
+  await startBridgeInNewTerminal('cli', sessionId);
 
-  // Run bridge directly (blocking, user interacts in terminal)
-  // Bridge starts HTTP server + PTY + polling, waitForActivation works after that
-  await runBridgeDirectly('cli', sessionId);
+  console.log('✅ 微信双向绑定已启动');
+  console.log('   📺 新终端窗口已打开，Claude Code 将在该窗口中运行');
+  console.log('   📱 微信发消息 → 自动注入到 Claude');
+  console.log('   💬 Claude 回复 → 自动推送到微信');
+  console.log('\n💡 使用方式：');
+  console.log('   1. 在新打开的终端窗口中与 Claude 对话');
+  console.log('   2. 同时可以在微信中发送消息，会自动注入到该终端');
+  console.log('   3. 按 Ctrl+C 退出');
+}
+
+/**
+ * Start bridge in a new terminal window (visible PTY).
+ * This opens a CMD window where the PTY runs, so user can see Claude Code.
+ */
+async function startBridgeInNewTerminal(mode: 'cli' | 'vscode', sessionId?: string): Promise<void> {
+  const bridgePath = join(import.meta.dirname, '..', 'dist', 'bridge.js');
+  const args = [bridgePath, '--mode', mode];
+  if (sessionId) args.push('--session', sessionId);
+  args.push('--cwd', process.cwd());
+
+  // Use start command to open new CMD window, then run node in that window
+  // /K keeps the window open after command completes
+  const cmd = `start "Claude Code - WeChat Bridge" cmd /K node ${args.map(a => `"${a}"`).join(' ')}`;
+
+  spawn('cmd', ['/c', cmd], {
+    detached: true,
+    stdio: 'ignore',
+    shell: false,
+  }).unref();
+
+  // Wait a bit for the new window to open
+  await new Promise(r => setTimeout(r, 1000));
 }
 
 // --- VSCode mode ---
@@ -443,7 +472,12 @@ When the user runs \`/wechat\`, do the following:
    \`\`\`
 
 3. After running the command:
-   - For CLI: Tell the user "微信双向绑定已启动，Claude Code 将自动重启.." then EXIT this session
+   - For CLI: Tell the user:
+     "✅ 微信双向绑定已启动！已自动打开新终端窗口，Claude Code 将在该窗口中运行。
+     你可以：
+     - 在新终端窗口中与 Claude 对话
+     - 同时在微信中发消息，会自动注入到 Claude
+     当前会话可以退出（输入 /exit 或 Ctrl+C）"
    - For VSCode: Tell the user:
      "✅ 微信通知已绑定成功！请立即在微信中给你刚绑定的 Bot 发一条消息（任意内容），这是激活 Bot 的必要步骤。之后 Claude 的回复就会自动推送到微信了。"
    - **IMPORTANT**: Always remind the user to send a message to the Bot first — the Bot won't work until activated by a user message.

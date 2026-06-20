@@ -122,8 +122,18 @@ export class PTYServer {
 
     this.ptyProcess.onExit(({ exitCode }) => {
       this.log(`Claude Code exited with code ${exitCode}`);
-      this.stop();
-      process.exit(exitCode ?? 0);
+      this.terminal.output.write('\n\n========================================\n');
+      this.terminal.output.write('🔴 Claude Code 会话已结束\n');
+      this.terminal.output.write('========================================\n');
+      this.terminal.output.write('你可以：\n');
+      this.terminal.output.write('  1. 在当前终端直接输入 ./node 来启动新的 Claude Code\n');
+      this.terminal.output.write('  2. 或者在 Claude Code 中执行 /wechat 重新启动\n');
+      this.terminal.output.write('  3. 微信消息仍会显示在此终端\n');
+      this.terminal.output.write('\n按 Ctrl+C 退出桥梁程序\n');
+      // Don't exit - let user see the message and decide
+      // Keep polling so WeChat messages still get displayed
+      this.running = false;
+      this.ptyProcess = null;
     });
 
     // Forward user terminal input to PTY
