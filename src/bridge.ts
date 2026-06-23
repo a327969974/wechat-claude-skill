@@ -221,7 +221,12 @@ async function main() {
     poller.stop();
     ptyServer?.stop();
     server.close();
-    process.exit(0);
+    // On Windows, node-pty's ConPTY can prevent process.exit() from working.
+    // Force kill ourselves after cleanup.
+    setTimeout(() => {
+      try { process.kill(process.pid, 'SIGKILL'); } catch {}
+    }, 1000);
+    process.exitCode = 0;
   };
 
   process.on('SIGTERM', shutdown);
