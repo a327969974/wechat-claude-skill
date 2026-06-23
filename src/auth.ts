@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { spawn } from 'node:child_process';
+import { spawn, exec } from 'node:child_process';
 
 const BRIDGE_DIR = join(homedir(), '.wechat-claude-skill');
 const ACCOUNT_PATH = join(BRIDGE_DIR, 'account.json');
@@ -204,10 +204,14 @@ export async function interactiveLogin(): Promise<AccountData> {
     if (!browserOpened) {
       browserOpened = true;
       try {
-        const opener = process.platform === 'win32'
-          ? spawn('cmd', ['/c', 'start', '', `"${qrcodeUrl}"`], { detached: true, stdio: 'ignore' })
-          : spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [qrcodeUrl], { detached: true, stdio: 'ignore' });
-        opener.unref();
+        if (process.platform === 'win32') {
+          // Use exec + shell to open URL — most reliable on Windows.
+          // spawn('cmd', ['/c', 'start', ...]) fails because cmd's start command
+          // misparses quoted URLs with & characters.
+          exec(`start "" "${qrcodeUrl}"`);
+        } else {
+          spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [qrcodeUrl], { detached: true, stdio: 'ignore' }).unref();
+        }
         console.log('📱 已在浏览器中打开二维码，请用微信扫描');
       } catch {
         console.log(`📱 请复制链接到浏览器打开：${qrcodeUrl}`);
