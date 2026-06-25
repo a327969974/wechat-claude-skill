@@ -156,6 +156,21 @@ export class PTYServer {
             }, 50);
           }
         }, 500);
+
+        // Print prominent activation reminder in the terminal
+        // This goes AFTER Claude Code starts, so it appears on top of the TUI
+        setTimeout(() => {
+          this.log('Printing activation reminder');
+          const notice = [
+            '',
+            '\x1b[1;36m' + '═'.repeat(50) + '\x1b[0m',
+            '\x1b[1;33m  ⚠️  请在微信中给 Bot 发送一条消息以激活会话！\x1b[0m',
+            '\x1b[1;33m  （任意内容即可，发完后即可正常使用）\x1b[0m',
+            '\x1b[1;36m' + '═'.repeat(50) + '\x1b[0m',
+            '',
+          ].join('\n');
+          try { this.terminal.output.write(notice); } catch {}
+        }, 2000);
       }
       // Write directly to terminal device
       this.terminal.output.write(data);
