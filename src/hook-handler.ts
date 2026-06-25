@@ -37,11 +37,11 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { loadAccount } from './auth.js';
 import { sendMessage } from './wechat.js';
+import { splitMessage } from './split-message.js';
 import type { BridgeConfig } from './config.js';
 
 const LOG_FILE = join(homedir(), '.wechat-claude-skill', 'hook-handler.log');
 const BRIDGE_DIR = join(homedir(), '.wechat-claude-skill');
-const MAX_MESSAGE_LENGTH = 4000;
 
 function debugLog(msg: string): void {
   const now = new Date();
@@ -100,24 +100,20 @@ async function main(): Promise<void> {
     pollInterval: 3000,
   };
 
-  // Truncate if too long
-  const text = message.length > MAX_MESSAGE_LENGTH
-    ? message.slice(0, MAX_MESSAGE_LENGTH) + '\n\n... (消息过长，已截断)'
-    : message;
+  // Split long messages into chunks (preserves markdown formatting)
+  const chunks = splitMessage(message);
+  debugLog(`Message split into ${chunks.length} chunks (original length: ${message.length})`);
 
-  // Send to WeChat — context_token is NOT required (see file header comment #2).
-  // Previously we called getUpdates here to fetch context_token, but:
-  // 1. context_token is optional (empty/fake values also work)
-  // 2. getUpdates without sync_buf may conflict with bridge's polling
-  // 3. getUpdates long-poll (30s) risks exceeding the hook timeout (60s)
-  // So we simply send without context_token.
-  debugLog('Sending to WeChat...');
-  const result = await sendMessage(config, account.userId, text);
+  // Send each chunk to WeChat — context_token is NOT required (see file header comment #2).
+  for (let i = 0; i < chunks.length; i++) {
+    debugLog(`Sending chunk ${i + 1}/${chunks.length}...`);
+    const result = await sendMessage(config, account.userId, chunks[i]);
 
-  if (result.success) {
-    debugLog(`Sent successfully (msgId: ${result.msgId || 'unknown'})`);
-  } else {
-    debugLog(`Send failed: ${result.error}`);
+    if (result.success) {
+      debugLog(`Chunk ${i + 1}/${chunks.length} sent successfully (msgId: ${result.msgId || 'unknown'})`);
+    } else {
+      debugLog(`Chunk ${i + 1}/${chunks.length} send failed: ${result.error}`);
+    }
   }
 
   process.exit(0);

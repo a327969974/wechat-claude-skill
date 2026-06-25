@@ -22,6 +22,7 @@ import { startMessagePolling, sendMessage, type WeChatMessage } from './wechat.j
 import { MessageQueue } from './queue.js';
 import { PTYServer } from './pty-server.js';
 import { showDisconnectToast } from './notify.js';
+import { splitMessage } from './split-message.js';
 
 const LOG_FILE = join(BRIDGE_DIR, 'bridge.log');
 
@@ -58,10 +59,8 @@ function parseArgs(): { mode: 'cli' | 'vscode'; sessionId?: string; cwd: string;
   return { mode, sessionId, cwd, launcherPid };
 }
 
-// Format message for WeChat display
-function formatForWeChat(message: string): string {
-  // Truncate very long messages
-  const maxLen = 4000;
+// Truncate very long messages for WeChat display (used only for short notifications)
+function truncateForWeChat(message: string, maxLen = 4000): string {
   if (message.length > maxLen) {
     return message.slice(0, maxLen) + '\n\n... (消息过长，已截断)';
   }
@@ -161,18 +160,22 @@ async function main() {
       return;
     }
 
-    // CLI mode or full message: send to WeChat
+    // CLI mode or full message: send to WeChat (split if too long)
     if (message && config.toUserId) {
-      const formatted = formatForWeChat(message);
-      log(`Attempting to send to WeChat: ${formatted.slice(0, 80)}...`);
-      log(`Config: botToken=${config.botToken?.slice(0, 10)}..., toUserId=${config.toUserId}`);
-      const result = await sendMessage(config, config.toUserId, formatted);
-      log(`sendMessage result: ${JSON.stringify(result)}`);
-      if (result.success) {
-        log(`Sent to WeChat: ${formatted.slice(0, 80)}...`);
-        checkHalfDisconnect(result);
-      } else {
-        logError(`WeChat send failed: ${result.error}`);
+      const chunks = splitMessage(message);
+      log(`Message split into ${chunks.length} chunks (original length: ${message.length})`);
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        log(`Sending chunk ${i + 1}/${chunks.length}: ${chunk.slice(0, 80)}...`);
+        const result = await sendMessage(config, config.toUserId, chunk);
+        log(`Chunk ${i + 1}/${chunks.length} result: ${JSON.stringify(result)}`);
+
+        if (result.success) {
+          log(`Sent chunk ${i + 1}/${chunks.length} to WeChat`);
+        } else {
+          logError(`Chunk ${i + 1}/${chunks.length} send failed: ${result.error}`);
+        }
         checkHalfDisconnect(result);
       }
     }
