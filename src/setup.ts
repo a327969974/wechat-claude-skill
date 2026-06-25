@@ -477,10 +477,7 @@ process.on('SIGTERM', () => { process.exit(0); });
   writeFileSync(launcherPath, launcherContent, 'utf-8');
 
   // Write a .bat wrapper to start the launcher.
-  // Using a .bat file is the most reliable way on Windows:
-  //   1. No cmd /K quoting issues (paths with spaces, .js file associations)
-  //   2. start command sees a .bat file → always runs it in cmd
-  //   3. .bat is native to Windows, no "how do you want to open this file?" dialog
+  // Using a .bat file avoids .js file association issues on Windows.
   const batPath = join(BRIDGE_DIR, 'cli-start.bat');
   const batContent = `@echo off
 chcp 65001 >nul
@@ -490,39 +487,22 @@ pause
 `;
   writeFileSync(batPath, batContent, 'utf-8');
 
-  // Try two methods to open the new CMD window.
-  // Method 1: cmd /c start (fast, native) — fails in some bash/terminal environments
-  // Method 2: PowerShell Start-Process (slower but reliable everywhere)
-  const method1 = () => {
-    const child = spawn('cmd', ['/c', 'start', '"[微信桥接] Claude Code"', batPath], {
-      detached: true,
-      stdio: 'ignore',
-      shell: false,
-    });
-    child.unref();
-    return child.pid != null && child.pid > 0;
-  };
-
-  const method2 = () => {
-    const child = spawn('powershell', [
-      '-NoProfile', '-NonInteractive', '-Command',
-      `Start-Process cmd -ArgumentList '/c','${batPath.replace(/'/g, "''")}'`,
-    ], {
-      detached: true,
-      stdio: 'ignore',
-      shell: false,
-    });
-    child.unref();
-    return child.pid != null && child.pid > 0;
-  };
-
-  // Try method 1 first, fall back to method 2
-  try {
-    const ok = method1();
-    if (!ok) throw new Error('spawn returned no PID');
-  } catch {
-    method2();
-  }
+  // Use PowerShell Start-Process to open the new CMD window.
+  // This is the most reliable method across all Windows environments:
+  //   - Works from bash, cmd, PowerShell, or any terminal
+  //   - No cmd /c start quoting pitfalls (paths with spaces, etc.)
+  //   - No .js file association issues
+  //   - Start-Process cmd with a .bat = same as double-clicking the .bat
+  const escapedBatPath = batPath.replace(/'/g, "''");
+  const child = spawn('powershell', [
+    '-NoProfile', '-NonInteractive', '-Command',
+    `Start-Process cmd -ArgumentList '/c','${escapedBatPath}'`,
+  ], {
+    detached: true,
+    stdio: 'ignore',
+    shell: false,
+  });
+  child.unref();
 
   // Don't wait — the new window opens asynchronously and the parent
   // process (wechat-claude-skill cli) should exit quickly so that
