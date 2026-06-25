@@ -476,20 +476,53 @@ process.on('SIGTERM', () => { process.exit(0); });
   mkdirSync(BRIDGE_DIR, { recursive: true });
   writeFileSync(launcherPath, launcherContent, 'utf-8');
 
-  // Open new CMD window running the launcher
-  // Strategy: use `start` command with a title, then `cmd /K "node launcher.js"`
-  // The inner quotes ensure paths with spaces (e.g. "Program Files") are handled.
-  // We must NOT pass process.execPath directly to cmd /K because:
-  //   1. cmd.exe's /K flag doesn't handle quoted paths well
-  //   2. If .js file association is wrong, Windows opens the file in an editor
-  // Instead, we use a quoted command string that explicitly calls node.
-  const nodeExe = process.execPath;  // e.g. C:\Program Files\nodejs\node.exe
-  const startCmd = `"${nodeExe}" "${launcherPath}"`;
-  spawn('cmd', ['/c', 'start', '"[微信桥接] Claude Code"', 'cmd', '/K', startCmd], {
-    detached: true,
-    stdio: 'ignore',
-    shell: false,
-  }).unref();
+  // Write a .bat wrapper to start the launcher.
+  // Using a .bat file is the most reliable way on Windows:
+  //   1. No cmd /K quoting issues (paths with spaces, .js file associations)
+  //   2. start command sees a .bat file → always runs it in cmd
+  //   3. .bat is native to Windows, no "how do you want to open this file?" dialog
+  const batPath = join(BRIDGE_DIR, 'cli-start.bat');
+  const batContent = `@echo off
+chcp 65001 >nul
+title [微信桥接] Claude Code
+"${process.execPath}" "${launcherPath}"
+pause
+`;
+  writeFileSync(batPath, batContent, 'utf-8');
+
+  // Try two methods to open the new CMD window.
+  // Method 1: cmd /c start (fast, native) — fails in some bash/terminal environments
+  // Method 2: PowerShell Start-Process (slower but reliable everywhere)
+  const method1 = () => {
+    const child = spawn('cmd', ['/c', 'start', '"[微信桥接] Claude Code"', batPath], {
+      detached: true,
+      stdio: 'ignore',
+      shell: false,
+    });
+    child.unref();
+    return child.pid != null && child.pid > 0;
+  };
+
+  const method2 = () => {
+    const child = spawn('powershell', [
+      '-NoProfile', '-NonInteractive', '-Command',
+      `Start-Process cmd -ArgumentList '/c','${batPath.replace(/'/g, "''")}'`,
+    ], {
+      detached: true,
+      stdio: 'ignore',
+      shell: false,
+    });
+    child.unref();
+    return child.pid != null && child.pid > 0;
+  };
+
+  // Try method 1 first, fall back to method 2
+  try {
+    const ok = method1();
+    if (!ok) throw new Error('spawn returned no PID');
+  } catch {
+    method2();
+  }
 
   // Don't wait — the new window opens asynchronously and the parent
   // process (wechat-claude-skill cli) should exit quickly so that
